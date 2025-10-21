@@ -1,0 +1,190 @@
+#include <Servo.h>
+#include <DHT.h>
+
+#define DHTPIN 2
+#define DHTTYPE DHT11
+
+// ----- Motor group pins -----
+#define MIX_MOTOR1 3
+#define MIX_MOTOR2 4
+#define SEED_MOTOR1 5
+#define SEED_MOTOR2 6
+#define LEFT_MOTOR1 7
+#define LEFT_MOTOR2 8
+#define RIGHT_MOTOR1 9
+#define RIGHT_MOTOR2 10
+
+// ----- Water pump (via L298N on A4, A5) -----
+#define PUMP_IN1 A4
+#define PUMP_IN2 A5
+
+// ----- Ultrasonic pins -----
+#define TRIG_PIN 11
+#define ECHO_PIN 12
+
+// ----- Servo & Sensors -----
+#define SERVO_PIN 13
+#define SOIL_SENSOR A0
+
+// ----- Bluetooth -----
+#define BT Serial
+
+// ----- Objects -----
+Servo servo;
+DHT dht(DHTPIN, DHTTYPE);
+
+// ----- Variables -----
+bool ultrasonicEnabled = true;
+bool obstacleDetected = false;
+bool lastStateWasStopped = false;
+char command = ' ';
+int servoAngle = 0;
+
+void setup() {
+  BT.begin(9600);
+  Serial.begin(9600);
+  
+  pinMode(MIX_MOTOR1, OUTPUT);
+  pinMode(MIX_MOTOR2, OUTPUT);
+  pinMode(SEED_MOTOR1, OUTPUT);
+  pinMode(SEED_MOTOR2, OUTPUT);
+  pinMode(LEFT_MOTOR1, OUTPUT);
+  pinMode(LEFT_MOTOR2, OUTPUT);
+  pinMode(RIGHT_MOTOR1, OUTPUT);
+  pinMode(RIGHT_MOTOR2, OUTPUT);
+  pinMode(PUMP_IN1, OUTPUT);
+  pinMode(PUMP_IN2, OUTPUT);
+  
+  pinMode(TRIG_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
+  
+  servo.attach(SERVO_PIN);
+  servo.write(0);
+  
+  dht.begin();
+  stopAllMotors();
+  
+  BT.println("Robot Ready!");
+}
+
+void loop() {
+  // Ultrasonic safety
+  if (ultrasonicEnabled) {
+    float distance = getDistance();
+    if (distance > 0 && distance < 15) {
+      if (!obstacleDetected) {
+        obstacleDetected = true;
+        stopAllMotors();
+        BT.println("Obstacle detected — stopped");
+      }
+    } else if (obstacleDetected) {
+      obstacleDetected = false;
+      BT.println("Path clear — resuming");
+    }
+  }
+
+  if (BT.available()) {
+    command = BT.read();
+    executeCommand(command);
+  }
+}
+
+// ----- Command Handling -----
+void executeCommand(char cmd) {
+  if (obstacleDetected && cmd != 'u') return;
+
+  switch (cmd) {
+    // Soil mixing
+    case 'a': motorForward(MIX_MOTOR1, MIX_MOTOR2); break;
+    case 'b': motorBackward(MIX_MOTOR1, MIX_MOTOR2); break;
+
+    // Seed dispensing
+    case 'c': motorForward(SEED_MOTOR1, SEED_MOTOR2); break;
+    case 'd': motorBackward(SEED_MOTOR1, SEED_MOTOR2); break;
+
+    // Driving
+    case 'e': motorForward(LEFT_MOTOR1, LEFT_MOTOR2); break;
+    case 'f': motorBackward(LEFT_MOTOR1, LEFT_MOTOR2); break;
+    case 'g': motorForward(RIGHT_MOTOR1, RIGHT_MOTOR2); break;
+    case 'h': motorBackward(RIGHT_MOTOR1, RIGHT_MOTOR2); break;
+
+    // Stop all
+    case 's': stopAllMotors(); break;
+
+    // Servo control
+    case 'v': moveServoAndReadSoil(); break;
+
+    // Water pump ON/OFF
+    case 'p': digitalWrite(PUMP_IN1, HIGH); digitalWrite(PUMP_IN2, LOW); break;
+    case 'o': digitalWrite(PUMP_IN1, LOW); digitalWrite(PUMP_IN2, LOW); break;
+
+    // DHT11 data
+    case 't': readDHT(); break;
+
+    // Toggle ultrasonic
+    case 'u':
+      ultrasonicEnabled = !ultrasonicEnabled;
+      BT.print("Ultrasonic Sensor: ");
+      BT.println(ultrasonicEnabled ? "ENABLED" : "DISABLED");
+      break;
+  }
+}
+
+// ----- Helper Functions -----
+void motorForward(int in1, int in2) {
+  digitalWrite(in1, HIGH);
+  digitalWrite(in2, LOW);
+}
+
+void motorBackward(int in1, int in2) {
+  digitalWrite(in1, LOW);
+  digitalWrite(in2, HIGH);
+}
+
+void stopAllMotors() {
+  digitalWrite(MIX_MOTOR1, LOW);
+  digitalWrite(MIX_MOTOR2, LOW);
+  digitalWrite(SEED_MOTOR1, LOW);
+  digitalWrite(SEED_MOTOR2, LOW);
+  digitalWrite(LEFT_MOTOR1, LOW);
+  digitalWrite(LEFT_MOTOR2, LOW);
+  digitalWrite(RIGHT_MOTOR1, LOW);
+  digitalWrite(RIGHT_MOTOR2, LOW);
+  digitalWrite(PUMP_IN1, LOW);
+  digitalWrite(PUMP_IN2, LOW);
+}
+
+float getDistance() {
+  digitalWrite(TRIG_PIN, LOW);
+  delayMicroseconds(2);
+  digitalWrite(TRIG_PIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG_PIN, LOW);
+  long duration = pulseIn(ECHO_PIN, HIGH, 20000);
+  return duration * 0.034 / 2;
+}
+
+void moveServoAndReadSoil() {
+  for (int i = 0; i <= 90; i += 5) {
+    servo.write(i);
+    delay(30);
+  }
+  delay(500);
+  
+  int moisture = analogRead(SOIL_SENSOR);
+  BT.print("Soil Moisture: ");
+  BT.println(moisture);
+  
+  for (int i = 90; i >= 0; i -= 5) {
+    servo.write(i);
+    delay(30);
+  }
+}
+
+void readDHT() {
+  float h = dht.readHumidity();
+  float t = dht.readTemperature();
+  BT.print("Temp: "); BT.print(t);
+  BT.print(" °C | Humidity: "); BT.print(h);
+  BT.println(" %");
+}
